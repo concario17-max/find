@@ -1,8 +1,4 @@
-import fs from 'node:fs/promises';
-import path from 'node:path';
-
-const INDEX_RELATIVE_PATH = 'data/index.json';
-const MODEL = process.env.OPENAI_MATCH_MODEL || 'gpt-5.4';
+const DEFAULT_MODEL = 'gpt-5.4';
 const MAX_SHORTLIST = 8;
 const MAX_FINAL_MATCHES = 5;
 const RERANK_IMAGE_LIMIT = 3;
@@ -49,24 +45,22 @@ const rerankSchema = {
   required: ['best_match_id', 'best_match_reason', 'confidence', 'matches'],
 };
 
-const indexCache = {
-  mtimeMs: 0,
-  data: null,
-};
-
+let indexCache = null;
+let indexCachePromise = null;
 const imageCache = new Map();
 
-export async function matchItemPhoto({ projectRoot, payload }) {
-  const index = await loadIndex(projectRoot);
-  const apiKey = process.env.OPENAI_API_KEY;
+export async function matchItemPhoto({ env, payload, requestUrl }) {
+  const model = env.OPENAI_MATCH_MODEL || DEFAULT_MODEL;
+  const index = await loadIndex(env, requestUrl);
+  const apiKey = env.OPENAI_API_KEY;
 
   if (!apiKey) {
-    return buildErrorResponse(index, 'OPENAI_API_KEY_MISSING', 'OPENAI_API_KEY is not configured.');
+    return buildErrorResponse(index, model, 'OPENAI_API_KEY_MISSING', 'OPENAI_API_KEY is not configured.');
   }
 
   const imageDataUrl = normalizeImageDataUrl(payload?.imageDataUrl);
   if (!imageDataUrl) {
-    return buildErrorResponse(index, 'INVALID_INPUT', 'imageDataUrl is required.');
+    return buildErrorResponse(index, model, 'INVALID_INPUT', 'imageDataUrl is required.');
   }
 
   const startedAt = Date.now();
@@ -75,27 +69,29 @@ export async function matchItemPhoto({ projectRoot, payload }) {
   let shortlistWithImages;
 
   try {
-    queryProfile = await describeQueryPhoto(apiKey, imageDataUrl, payload?.fileName || 'upload');
+    queryProfile = await describeQueryPhoto(apiKey, model, imageDataUrl, payload?.fileName || 'upload');
     shortlist = buildShortlist(index.items, queryProfile, Math.max(4, Number(payload?.shortlistSize) || MAX_SHORTLIST));
-    shortlistWithImages = await Promise.all(shortlist.map(async (candidate, index) => ({
-      ...candidate,
-      imageDataUrl:
-        index < RERANK_IMAGE_LIMIT && candidate.primaryImagePath
-          ? await readImageDataUrl(projectRoot, candidate.primaryImagePath).catch(() => '')
-          : '',
-    })));
+    shortlistWithImages = await Promise.all(
+      shortlist.map(async (candidate, index) => ({
+        ...candidate,
+        imageDataUrl:
+          index < RERANK_IMAGE_LIMIT && candidate.primaryImagePath
+            ? await readImageDataUrl(env, requestUrl, candidate.primaryImagePath).catch(() => '')
+            : '',
+      })),
+    );
   } catch (error) {
-    const response = buildErrorResponse(index, 'OPENAI_API_ERROR', 'OpenAI request failed.');
+    const response = buildErrorResponse(index, model, 'OPENAI_API_ERROR', 'OpenAI request failed.');
     response.meta.elapsedMs = Date.now() - startedAt;
     return response;
   }
 
   try {
-    const finalMatches = await rerankCandidates(apiKey, imageDataUrl, shortlistWithImages);
+    const finalMatches = await rerankCandidates(apiKey, model, imageDataUrl, shortlistWithImages);
 
     return {
       ok: true,
-      model: MODEL,
+      model,
       elapsedMs: Date.now() - startedAt,
       queryProfile,
       shortlist: shortlistWithImages.map(toClientCandidate),
@@ -107,19 +103,19 @@ export async function matchItemPhoto({ projectRoot, payload }) {
       },
     };
   } catch (error) {
-    return buildFallbackResponse(index, startedAt, queryProfile, shortlistWithImages, {
+    return buildFallbackResponse(index, model, startedAt, queryProfile, shortlistWithImages, {
       code: 'OPENAI_RERANK_FALLBACK',
       message: 'OpenAI rerank failed; returning shortlist fallback.',
     });
   }
 }
 
-function buildErrorResponse(index, code, message) {
+function buildErrorResponse(index, model, code, message) {
   return {
     ok: false,
     error: { code, message },
     meta: {
-      model: MODEL,
+      model,
       items: index.items.length,
       groups: index.groupSummary.length,
       generatedAt: index.generatedAt,
@@ -127,7 +123,7 @@ function buildErrorResponse(index, code, message) {
   };
 }
 
-function buildFallbackResponse(index, startedAt, queryProfile, shortlist, warning) {
+function buildFallbackResponse(index, model, startedAt, queryProfile, shortlist, warning) {
   const fallbackMatches = shortlist.slice(0, MAX_FINAL_MATCHES).map((candidate) => ({
     ...toClientCandidate(candidate),
     reason: 'Rerank failed; returning shortlist fallback.',
@@ -138,7 +134,7 @@ function buildFallbackResponse(index, startedAt, queryProfile, shortlist, warnin
     ok: true,
     fallback: true,
     warning,
-    model: MODEL,
+    model,
     elapsedMs: Date.now() - startedAt,
     queryProfile,
     shortlist: shortlist.map(toClientCandidate),
@@ -153,26 +149,39 @@ function buildFallbackResponse(index, startedAt, queryProfile, shortlist, warnin
   };
 }
 
-async function loadIndex(projectRoot) {
-  const absolutePath = path.join(projectRoot, INDEX_RELATIVE_PATH);
-  const stat = await fs.stat(absolutePath);
-  if (indexCache.data && indexCache.mtimeMs === stat.mtimeMs) {
-    return indexCache.data;
+async function loadIndex(env, requestUrl) {
+  if (indexCache) {
+    return indexCache;
   }
 
-  const raw = await fs.readFile(absolutePath, 'utf8');
-  const parsed = JSON.parse(raw);
-  const items = Array.isArray(parsed.items) ? parsed.items.map(normalizeItem).filter(Boolean) : [];
-  const groupSummary = Array.isArray(parsed.groupSummary) ? parsed.groupSummary : [];
-  const data = {
-    generatedAt: typeof parsed.generatedAt === 'string' ? parsed.generatedAt : '',
-    groupSummary,
-    items,
-  };
+  if (!indexCachePromise) {
+    indexCachePromise = (async () => {
+      const response = await env.ASSETS.fetch(new URL('/data/index.json', requestUrl));
+      if (!response.ok) {
+        throw new Error(`Failed to load index.json: ${response.status}`);
+      }
 
-  indexCache.data = data;
-  indexCache.mtimeMs = stat.mtimeMs;
-  return data;
+      const parsed = await response.json();
+      const items = Array.isArray(parsed.items) ? parsed.items.map(normalizeItem).filter(Boolean) : [];
+      const groupSummary = Array.isArray(parsed.groupSummary) ? parsed.groupSummary : [];
+      return {
+        generatedAt: typeof parsed.generatedAt === 'string' ? parsed.generatedAt : '',
+        groupSummary,
+        items,
+      };
+    })().then(
+      (data) => {
+        indexCache = data;
+        return data;
+      },
+      (error) => {
+        indexCachePromise = null;
+        throw error;
+      },
+    );
+  }
+
+  return indexCachePromise;
 }
 
 function normalizeItem(item) {
@@ -191,9 +200,9 @@ function normalizeItem(item) {
   };
 }
 
-async function describeQueryPhoto(apiKey, imageDataUrl, fileName) {
+async function describeQueryPhoto(apiKey, model, imageDataUrl, fileName) {
   const response = await callResponsesApi(apiKey, {
-    model: MODEL,
+    model,
     max_output_tokens: 300,
     text: {
       format: {
@@ -209,8 +218,7 @@ async function describeQueryPhoto(apiKey, imageDataUrl, fileName) {
         content: [
           {
             type: 'input_text',
-            text:
-              'Look at the image and produce a compact query profile for item matching. Return JSON only.',
+            text: 'Look at the image and produce a compact query profile for item matching. Return JSON only.',
           },
           {
             type: 'input_text',
@@ -228,12 +236,11 @@ async function describeQueryPhoto(apiKey, imageDataUrl, fileName) {
   return parseStructuredJson(response, 'query_profile');
 }
 
-async function rerankCandidates(apiKey, imageDataUrl, shortlist) {
+async function rerankCandidates(apiKey, model, imageDataUrl, shortlist) {
   const userContent = [
     {
       type: 'input_text',
-      text:
-        'Compare the query image against the candidate images and choose the best overall match. Return JSON only.',
+      text: 'Compare the query image against the candidate images and choose the best overall match. Return JSON only.',
     },
     {
       type: 'input_image',
@@ -266,7 +273,7 @@ async function rerankCandidates(apiKey, imageDataUrl, shortlist) {
   });
 
   const response = await callResponsesApi(apiKey, {
-    model: MODEL,
+    model,
     max_output_tokens: 500,
     text: {
       format: {
@@ -416,15 +423,17 @@ function extractOutputText(response) {
 }
 
 function buildShortlist(items, queryProfile, limit) {
-  const queryTerms = tokenize([
-    queryProfile.search_query,
-    ...(Array.isArray(queryProfile.keywords) ? queryProfile.keywords : []),
-    ...(Array.isArray(queryProfile.visible_text) ? queryProfile.visible_text : []),
-    ...(Array.isArray(queryProfile.observed_colors) ? queryProfile.observed_colors : []),
-    queryProfile.shape,
-    queryProfile.material,
-    queryProfile.likely_group,
-  ].join(' '));
+  const queryTerms = tokenize(
+    [
+      queryProfile.search_query,
+      ...(Array.isArray(queryProfile.keywords) ? queryProfile.keywords : []),
+      ...(Array.isArray(queryProfile.visible_text) ? queryProfile.visible_text : []),
+      ...(Array.isArray(queryProfile.observed_colors) ? queryProfile.observed_colors : []),
+      queryProfile.shape,
+      queryProfile.material,
+      queryProfile.likely_group,
+    ].join(' '),
+  );
 
   const scored = items.map((item) => ({
     ...item,
@@ -454,15 +463,9 @@ function buildShortlist(items, queryProfile, limit) {
 }
 
 function scoreItem(item, queryTerms, queryProfile) {
-  const itemTokens = tokenize([
-    item.id,
-    item.group,
-    item.title,
-    item.description,
-    item.searchText,
-    item.sheetName,
-    item.sourceFile,
-  ].join(' '));
+  const itemTokens = tokenize(
+    [item.id, item.group, item.title, item.description, item.searchText, item.sheetName, item.sourceFile].join(' '),
+  );
 
   let overlap = 0;
   const tokenSet = new Set(itemTokens);
@@ -507,16 +510,25 @@ function toClientCandidate(candidate) {
   };
 }
 
-async function readImageDataUrl(projectRoot, relativePath) {
+async function readImageDataUrl(env, requestUrl, relativePath) {
   const cacheKey = relativePath;
   if (imageCache.has(cacheKey)) {
     return imageCache.get(cacheKey);
   }
 
-  const absolutePath = resolveProjectPath(projectRoot, relativePath);
-  const bytes = await fs.readFile(absolutePath);
-  const mimeType = getMimeType(absolutePath);
-  const dataUrl = `data:${mimeType};base64,${bytes.toString('base64')}`;
+  const normalizedPath = normalizeAssetPath(relativePath);
+  if (!normalizedPath) {
+    throw new Error('Invalid image path.');
+  }
+
+  const response = await env.ASSETS.fetch(new URL(`/${normalizedPath}`, requestUrl));
+  if (!response.ok) {
+    throw new Error(`Failed to load image asset: ${response.status}`);
+  }
+
+  const mimeType = response.headers.get('content-type') || getMimeType(normalizedPath);
+  const bytes = new Uint8Array(await response.arrayBuffer());
+  const dataUrl = `data:${mimeType};base64,${bytesToBase64(bytes)}`;
   imageCache.set(cacheKey, dataUrl);
   return dataUrl;
 }
@@ -527,23 +539,29 @@ function normalizeImageDataUrl(value) {
   return trimmed.startsWith('data:image/') ? trimmed : '';
 }
 
-function resolveProjectPath(projectRoot, relativePath) {
-  const normalized = String(relativePath || '').replace(/^\/+/, '');
-  const root = path.resolve(projectRoot);
-  const target = path.resolve(root, normalized.split('/').join(path.sep));
-  const rootWithSep = `${root}${path.sep}`;
-  if (target !== root && !target.startsWith(rootWithSep)) {
-    throw new Error('Invalid image path.');
+function normalizeAssetPath(value) {
+  const normalized = String(value || '').replace(/\\/g, '/').replace(/^\/+/, '');
+  if (!normalized || normalized.includes('..')) {
+    return '';
   }
-  return target;
+  return normalized;
 }
 
 function getMimeType(filePath) {
-  const ext = path.extname(filePath).toLowerCase();
-  if (ext === '.png') return 'image/png';
-  if (ext === '.webp') return 'image/webp';
-  if (ext === '.gif') return 'image/gif';
+  const ext = filePath.split('.').pop()?.toLowerCase();
+  if (ext === 'png') return 'image/png';
+  if (ext === 'webp') return 'image/webp';
+  if (ext === 'gif') return 'image/gif';
   return 'image/jpeg';
+}
+
+function bytesToBase64(bytes) {
+  let binary = '';
+  const chunkSize = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
+  }
+  return btoa(binary);
 }
 
 function tokenize(text) {

@@ -1,23 +1,26 @@
 Current Task
-- Connect the local workspace to the GitHub repository `concario17-max/find` and push the current OpenAI-backed implementation.
+- Commit and push the current workspace changes to `origin/main`, including the dev/startup fixes and the Cloudflare Workers matcher updates.
 
 Route
 - Route A
-- Reason: narrow repo-connection and push task with one write slice; no multi-file feature fanout needed.
+- Reason: this is a narrow git finish-up task with one small ignore-file edit and a single commit/push slice; no implementation fanout is needed.
 
 Writer Slot
-- main: in progress
+- main: write-capable
+- worker_workers: n/a
+- worker_review: n/a
 
 Contract Freeze
-- Input data: the current workspace contents and the remote GitHub repository `concario17-max/find`.
-- MVP behavior: initialize git if needed, set the GitHub remote, commit the current workspace, and push it to `main`.
-- Accuracy strategy: not applicable; this is repository wiring.
-- Out of scope for MVP: code changes beyond what is already in the workspace, branch strategy changes, and repo history rewriting.
-- Implementation approach: non-destructive git setup and push using the existing workspace state.
-- Write sets: main owns the git connection and push steps.
+- Input data: the existing matcher logic in `server/openai-matcher.mjs` and `worker/openai-matcher.js`.
+- MVP behavior: preserve the current `/api/match` response shape while making rerank failures fail-soft instead of surfacing `OPENAI_API_ERROR`.
+- Accuracy strategy: keep shortlist scoring unchanged; only reduce the rerank request size and add retry/fallback handling around OpenAI Responses calls.
+- Out of scope for MVP: data model changes, ranking algorithm changes, auth, and unrelated UI redesign.
+- Implementation approach: keep the committed scope limited to the existing workspace changes, ignore generated Cloudflare state, and push the current `main` branch to `origin`.
+- Write sets: `.gitignore` owns the ignore tweak; git commit/push operations own the remainder of the task.
+- Failure policy: do not include generated `.wrangler/` contents in the commit.
 
 Reviewer
-- none
+- Hubble
 
 Last Update
-- 2026-05-14: scope changed to repository connection and push for the current workspace.
+- 2026-05-14: committing and pushing the current workspace changes, with `.wrangler/` kept out of version control.

@@ -6,11 +6,14 @@
   "scripts": {
     "index": "node scripts/build-index.mjs",
     "setup:openai": "node scripts/setup-openai-key.mjs",
-    "dev": "vite",
-    "build": "vite build",
+    "dev": "npm run build && node scripts/sync-cloudflare-env.mjs && wrangler dev",
+    "build": "npm run index && vite build && node scripts/copy-cloudflare-assets.mjs",
+    "dev:cf": "npm run build && node scripts/sync-cloudflare-env.mjs && wrangler dev",
+    "deploy": "npm run build && node scripts/sync-cloudflare-env.mjs --push-secret --deploy",
     "preview": "vite preview"
   },
   "devDependencies": {
-    "vite": "^6.1.0"
+    "vite": "^6.1.0",
+    "wrangler": "^4.90.1"
   }
 }

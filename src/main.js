@@ -205,6 +205,21 @@ function bindEvents() {
   els['clear-query'].addEventListener('click', clearQuery);
 }
 
+async function readJsonResponse(response, resourceLabel) {
+  const text = await response.text();
+  const body = text.trim();
+
+  if (!body) {
+    throw new Error(`${resourceLabel} 응답이 비어 있어요.`);
+  }
+
+  try {
+    return JSON.parse(body);
+  } catch {
+    throw new Error(`${resourceLabel} 응답이 JSON 형식이 아니에요.`);
+  }
+}
+
 async function loadIndex() {
   state.indexStatus = 'loading';
   state.apiMessage = '인덱스 읽는 중';
@@ -216,7 +231,7 @@ async function loadIndex() {
       throw new Error(`HTTP ${response.status}`);
     }
 
-    const data = await response.json();
+    const data = await readJsonResponse(response, INDEX_URL);
     state.index = {
       generatedAt: String(data.generatedAt || ''),
       groupSummary: Array.isArray(data.groupSummary) ? data.groupSummary : [],
@@ -281,7 +296,7 @@ async function runMatch() {
       }),
     });
 
-    const data = await response.json();
+    const data = await readJsonResponse(response, MATCH_URL);
     if (!response.ok || !data.ok) {
       const message = data?.error?.message || `HTTP ${response.status}`;
       throw new Error(message);
