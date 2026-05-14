@@ -7,6 +7,8 @@ const MAX_SHORTLIST = 8;
 const MAX_FINAL_MATCHES = 5;
 const RERANK_IMAGE_LIMIT = 3;
 const OPENAI_RETRY_LIMIT = 3;
+const NO_MATCH_CONFIDENCE_THRESHOLD = 60;
+const NO_MATCH_TOP_SCORE_THRESHOLD = 60;
 
 const queryProfileSchema = {
   type: 'object',
@@ -91,7 +93,11 @@ export async function matchItemPhoto({ projectRoot, payload }) {
   }
 
   try {
-    const finalMatches = await rerankCandidates(apiKey, imageDataUrl, shortlistWithImages);
+    const rerankResult = await rerankCandidates(apiKey, imageDataUrl, shortlistWithImages);
+
+    if (shouldSuppressMatch(rerankResult)) {
+      return buildNoMatchResponse(index, startedAt, queryProfile, shortlistWithImages, rerankResult);
+    }
 
     return {
       ok: true,
@@ -99,7 +105,7 @@ export async function matchItemPhoto({ projectRoot, payload }) {
       elapsedMs: Date.now() - startedAt,
       queryProfile,
       shortlist: shortlistWithImages.map(toClientCandidate),
-      matches: finalMatches,
+      matches: rerankResult.matches,
       meta: {
         items: index.items.length,
         groups: index.groupSummary.length,
@@ -148,6 +154,39 @@ function buildFallbackResponse(index, startedAt, queryProfile, shortlist, warnin
       groups: index.groupSummary.length,
       generatedAt: index.generatedAt,
       fallback: true,
+      warning,
+    },
+  };
+}
+
+function buildNoMatchResponse(index, startedAt, queryProfile, shortlist, rerankResult) {
+  const gateScore = Number(rerankResult.bestMatchScore);
+  const warning = {
+    code: 'OPENAI_LOW_CONFIDENCE',
+    message: 'Rerank confidence or best-match score were below the no-match threshold.',
+    confidence: rerankResult.confidence,
+    topScore: Number.isFinite(gateScore) ? gateScore : 0,
+    bestMatchScore: Number.isFinite(gateScore) ? gateScore : 0,
+    threshold: {
+      confidence: NO_MATCH_CONFIDENCE_THRESHOLD,
+      topScore: NO_MATCH_TOP_SCORE_THRESHOLD,
+    },
+  };
+
+  return {
+    ok: true,
+    noMatch: true,
+    warning,
+    model: MODEL,
+    elapsedMs: Date.now() - startedAt,
+    queryProfile,
+    shortlist: shortlist.map(toClientCandidate),
+    matches: [],
+    meta: {
+      items: index.items.length,
+      groups: index.groupSummary.length,
+      generatedAt: index.generatedAt,
+      noMatch: true,
       warning,
     },
   };
@@ -286,23 +325,32 @@ async function rerankCandidates(apiKey, imageDataUrl, shortlist) {
 
   const parsed = parseStructuredJson(response, 'rerank_candidates');
   const byId = new Map(shortlist.map((candidate) => [candidate.id, candidate]));
+  const normalizedMatches = Array.isArray(parsed.matches)
+    ? parsed.matches.map((entry) => {
+        const candidate = byId.get(entry.id);
+        if (!candidate) {
+          return null;
+        }
 
-  return parsed.matches
-    .slice(0, MAX_FINAL_MATCHES)
-    .map((entry) => {
-      const candidate = byId.get(entry.id);
-      if (!candidate) {
-        return null;
-      }
+        return {
+          ...toClientCandidate(candidate),
+          score: clamp(entry.score, 0, 100),
+          reason: String(entry.reason || ''),
+          signals: Array.isArray(entry.signals) ? entry.signals.map((signal) => String(signal)).filter(Boolean) : [],
+        };
+      }).filter(Boolean)
+    : [];
 
-      return {
-        ...toClientCandidate(candidate),
-        score: clamp(entry.score, 0, 100),
-        reason: String(entry.reason || ''),
-        signals: Array.isArray(entry.signals) ? entry.signals.map((signal) => String(signal)).filter(Boolean) : [],
-      };
-    })
-    .filter(Boolean);
+  const bestMatchScore = resolveBestMatchScore(parsed.best_match_id, normalizedMatches);
+  const matches = normalizedMatches.slice(0, MAX_FINAL_MATCHES);
+
+  return {
+    confidence: clamp(parsed.confidence, 0, 100),
+    bestMatchId: String(parsed.best_match_id || ''),
+    bestMatchReason: String(parsed.best_match_reason || ''),
+    bestMatchScore,
+    matches,
+  };
 }
 
 async function callResponsesApi(apiKey, body) {
@@ -396,6 +444,47 @@ function parseStructuredJson(response, label) {
   } catch (error) {
     throw new Error(`${label} JSON parse failed: ${error.message}`);
   }
+}
+
+function shouldSuppressMatch(rerankResult) {
+  if (!rerankResult) return true;
+
+  const confidence = Number(rerankResult.confidence);
+  const topScore = Number(rerankResult.bestMatchScore);
+
+  if (!Number.isFinite(confidence) || !Number.isFinite(topScore)) {
+    return true;
+  }
+
+  return confidence < NO_MATCH_CONFIDENCE_THRESHOLD || topScore < NO_MATCH_TOP_SCORE_THRESHOLD;
+}
+
+function resolveBestMatchScore(bestMatchId, matches) {
+  if (!Array.isArray(matches) || matches.length === 0) {
+    return NaN;
+  }
+
+  const normalizedBestMatchId = String(bestMatchId || '').trim();
+  if (normalizedBestMatchId) {
+    const bestMatch = matches.find((match) => match.id === normalizedBestMatchId);
+    if (bestMatch) {
+      const bestMatchScore = Number(bestMatch.score);
+      if (Number.isFinite(bestMatchScore)) {
+        return bestMatchScore;
+      }
+    }
+  }
+
+  const topMatch = matches.reduce((best, match) => {
+    const bestScore = Number(best?.score);
+    const matchScore = Number(match?.score);
+    if (!Number.isFinite(bestScore)) return match;
+    if (!Number.isFinite(matchScore)) return best;
+    return matchScore > bestScore ? match : best;
+  }, matches[0]);
+
+  const topScore = Number(topMatch?.score);
+  return Number.isFinite(topScore) ? topScore : NaN;
 }
 
 function extractOutputText(response) {

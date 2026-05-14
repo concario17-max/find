@@ -16,6 +16,8 @@ const state = {
   queryProfile: null,
   shortlist: [],
   matches: [],
+  noMatch: false,
+  matchWarning: null,
   apiMessage: '대기 중',
 };
 
@@ -280,6 +282,8 @@ async function runMatch() {
   if (!state.queryDataUrl) return;
 
   state.matchStatus = 'running';
+  state.noMatch = false;
+  state.matchWarning = null;
   state.apiMessage = 'OpenAI 호출 중';
   render();
 
@@ -307,7 +311,9 @@ async function runMatch() {
     state.queryProfile = data.queryProfile || null;
     state.shortlist = Array.isArray(data.shortlist) ? data.shortlist : [];
     state.matches = Array.isArray(data.matches) ? data.matches : [];
-    state.apiMessage = `${data.model || 'gpt-5.4'} 응답 완료`;
+    state.noMatch = Boolean(data.noMatch);
+    state.matchWarning = data.warning || null;
+    state.apiMessage = state.noMatch ? '확실한 후보 없음' : `${data.model || 'gpt-5.4'} 응답 완료`;
   } catch (error) {
     state.matchStatus = 'error';
     state.matchError = error instanceof Error ? error.message : '매칭 실패';
@@ -315,6 +321,8 @@ async function runMatch() {
     state.queryProfile = null;
     state.shortlist = [];
     state.matches = [];
+    state.noMatch = false;
+    state.matchWarning = null;
   }
 
   render();
@@ -327,6 +335,8 @@ function clearQuery() {
   state.matches = [];
   state.matchError = '';
   state.matchStatus = 'idle';
+  state.noMatch = false;
+  state.matchWarning = null;
   state.apiMessage = '대기 중';
   state.queryDataUrl = '';
 
@@ -345,7 +355,7 @@ function clearQuery() {
 function render() {
   const indexReady = state.indexStatus === 'ready' && state.index;
   els['stat-index'].textContent = labelIndexState(state.indexStatus);
-  els['stat-ai'].textContent = state.matchStatus === 'done' ? '응답 완료' : state.apiMessage;
+  els['stat-ai'].textContent = state.matchStatus === 'done' ? (state.noMatch ? '후보 없음' : '응답 완료') : state.apiMessage;
   els['stat-items'].textContent = indexReady ? String(state.index.items.length) : '0';
   els['stat-groups'].textContent = indexReady ? String(state.index.groupSummary.length) : '0';
 
@@ -359,6 +369,8 @@ function render() {
 
   els['match-hint'].textContent = state.matchError
     ? state.matchError
+    : state.noMatch
+      ? '확실한 후보가 아니라서 매칭을 확정하지 않았다.'
     : state.queryFile
       ? `${state.queryFile.name} 기준으로 AI가 후보를 정렬 중`
       : '사진을 올리면 결과가 나온다';
@@ -459,12 +471,16 @@ function renderEmptyState() {
   empty.classList.remove('hidden');
   els['empty-title'].textContent = state.matchStatus === 'error'
     ? 'AI 매칭이 실패했다'
+    : state.noMatch
+      ? '확실한 매칭을 못 찾았다'
     : state.indexStatus === 'error'
       ? '인덱스를 못 읽었다'
       : '아직 매칭할 사진이 없다';
 
   els['empty-copy'].textContent = state.matchStatus === 'error'
     ? state.matchError || '서버 응답을 못 받았다.'
+    : state.noMatch
+      ? `후보 ${state.shortlist.length}개는 봤지만 confidence와 top score가 낮아서 best match로 확정하지 않았다. 사진을 더 선명하게, 물건이 더 잘 보이게 다시 올려봐.`
     : state.indexStatus === 'error'
       ? state.indexError || 'data/index.json을 읽지 못했다.'
       : '사진을 올리면 OpenAI가 먼저 읽고, 로컬 인덱스 후보를 다시 정렬한다.';
@@ -501,6 +517,10 @@ function labelMatchState(value) {
 function buildStatusNote() {
   if (state.matchStatus === 'error' && state.matchError) {
     return state.matchError;
+  }
+
+  if (state.noMatch) {
+    return '확실한 후보가 아니라서 매칭을 비웠다. 사진을 더 또렷하게 다시 올려봐.';
   }
 
   if (state.indexStatus === 'error' && state.indexError) {

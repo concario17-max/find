@@ -1,26 +1,26 @@
 Current Task
-- Commit and push complete: the current workspace changes are on `origin/main`.
+- Completed: tightened the no-match gate so weak rerank results cannot slip through when only one confidence signal is strong, and made sure the model-selected best candidate is scored before trimming.
 
 Route
-- Route A
-- Reason: this is a narrow git finish-up task with one small ignore-file edit and a single commit/push slice; no implementation fanout is needed.
+- Route B
+- Reason: the fix spans both matcher implementations and needs synchronized rerank/no-match behavior across server and worker paths.
 
 Writer Slot
-- main: write-capable
-- worker_workers: n/a
-- worker_review: n/a
+- main: planner-only
+- worker_matcher: done
+- worker_review: done
 
 Contract Freeze
 - Input data: the existing matcher logic in `server/openai-matcher.mjs` and `worker/openai-matcher.js`.
-- MVP behavior: preserve the current `/api/match` response shape while making rerank failures fail-soft instead of surfacing `OPENAI_API_ERROR`.
-- Accuracy strategy: keep shortlist scoring unchanged; only reduce the rerank request size and add retry/fallback handling around OpenAI Responses calls.
-- Out of scope for MVP: data model changes, ranking algorithm changes, auth, and unrelated UI redesign.
-- Implementation approach: keep the committed scope limited to the existing workspace changes, ignore generated Cloudflare state, and push the current `main` branch to `origin`.
-- Write sets: `.gitignore` owns the ignore tweak; git commit/push operations own the remainder of the task.
-- Failure policy: do not include generated `.wrangler/` contents in the commit.
+- MVP behavior: keep the current API shape, but suppress low-confidence junk matches and surface an explicit no-match state when the best candidates are too weak.
+- Accuracy strategy: preserve the current shortlist/rerank flow, but add a confidence gate based on the final rerank scores and the model-selected best candidate.
+- Out of scope for MVP: a new embedding pipeline, database changes, auth, or any frontend changes.
+- Implementation approach: make `rerankCandidates()` expose enough information to resolve the model-chosen best candidate score before trimming, then make `shouldSuppressMatch()` gate on `best_match_id` when available and otherwise fall back to the top-scoring returned match.
+- Write sets: `server/openai-matcher.mjs` and `worker/openai-matcher.js` own the fix; keep the change set tight to those files unless verification exposes a direct blocker.
+- Failure policy: a weak result should be honest, not force a false best match.
 
 Reviewer
 - Hubble
 
 Last Update
-- 2026-05-14: commit `bb9415c` pushed to `origin/main`; `.wrangler/` stayed ignored.
+- 2026-05-14: confirmed the no-match gate now keys off `best_match_id` plus OR-threshold checks, with best-match scoring resolved before truncation; `npm.cmd run build` passed.
