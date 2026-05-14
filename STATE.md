@@ -1,5 +1,5 @@
 Current Task
-- Commit and push the current workspace changes to `origin/main`, including the dev/startup fixes and the Cloudflare Workers matcher updates.
+- Commit and push complete: the current workspace changes are on `origin/main`.
 
 Route
 - Route A
@@ -23,4 +23,4 @@ Reviewer
 - Hubble
 
 Last Update
-- 2026-05-14: committing and pushing the current workspace changes, with `.wrangler/` kept out of version control.
+- 2026-05-14: commit `bb9415c` pushed to `origin/main`; `.wrangler/` stayed ignored.
