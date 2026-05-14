@@ -37,7 +37,7 @@ function mountShell() {
     <main class="page">
       <section class="hero card">
         <div class="hero-copy">
-          <p class="eyebrow">OPENAI MATCHER</p>
+          <p class="eyebrow">오픈AI 매처</p>
           <h1>사진만 올리면 AI가 네 물건 후보를 골라준다</h1>
           <p class="lede">
             미리 넣어둔 폴더의 물건 데이터와 사진을 기반으로, OpenAI가 먼저 사진을 읽고
@@ -122,7 +122,7 @@ function mountShell() {
 
             <div class="status-list">
               <div class="status-row">
-                <span>source</span>
+                <span>원본</span>
                 <strong id="status-source">/data/index.json</strong>
               </div>
               <div class="status-row">
@@ -130,25 +130,25 @@ function mountShell() {
                 <strong id="status-index">불러오는 중</strong>
               </div>
               <div class="status-row">
-                <span>match</span>
+                <span>매칭</span>
                 <strong id="status-match">대기 중</strong>
               </div>
               <div class="status-row">
-                <span>model</span>
+                <span>모델</span>
                 <strong id="status-model">gpt-5.4</strong>
               </div>
               <div class="status-row">
-                <span>items</span>
+                <span>물건 수</span>
                 <strong id="status-items">0</strong>
               </div>
               <div class="status-row">
-                <span>groups</span>
+                <span>그룹 수</span>
                 <strong id="status-groups">0</strong>
               </div>
             </div>
 
             <div class="summary">
-              <p class="summary-title">group summary</p>
+              <p class="summary-title">그룹 요약</p>
               <div id="group-summary" class="chips"></div>
             </div>
 
@@ -413,14 +413,14 @@ function renderResults() {
   els['results-grid'].innerHTML = state.matches
     .map((match, index) => {
       const badgeClass = index === 0 ? 'exact' : 'visual';
-      const badgeText = index === 0 ? 'best match' : `#${index + 1}`;
+      const badgeText = index === 0 ? '최상위 후보' : `#${index + 1}`;
       const signals = Array.isArray(match.signals) ? match.signals.slice(0, 4) : [];
       const imageSrc = match.primaryImagePath ? encodeURI(`/${match.primaryImagePath}`) : '';
 
       return `
         <article class="match-card card">
           <div class="match-media">
-            ${imageSrc ? `<img src="${imageSrc}" alt="${escapeHtml(match.title || match.id)}" />` : '<div class="media-fallback">no image</div>'}
+            ${imageSrc ? `<img src="${imageSrc}" alt="${escapeHtml(match.title || match.id)}" />` : '<div class="media-fallback">이미지 없음</div>'}
           </div>
           <div class="match-body">
             <div class="match-head">
