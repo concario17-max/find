@@ -1,6 +1,6 @@
 {
   "$schema": "./node_modules/wrangler/config-schema.json",
-  "name": "find-item-match-shell",
+  "name": "find",
   "main": "./worker/index.js",
   "compatibility_date": "2026-05-14",
   "assets": {
