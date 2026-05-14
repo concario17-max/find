@@ -8,9 +8,12 @@
     "setup:openai": "node scripts/setup-openai-key.mjs",
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "npm run build && wrangler dev",
+    "deploy": "npm run build && wrangler deploy"
   },
   "devDependencies": {
-    "vite": "^6.1.0"
+    "@cloudflare/vite-plugin": "^1.36.4",
+    "vite": "^6.1.0",
+    "wrangler": "^4.90.1"
   }
 }
