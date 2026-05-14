@@ -1,0 +1,16 @@
+{
+  "name": "find-item-match-shell",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "index": "node scripts/build-index.mjs",
+    "setup:openai": "node scripts/setup-openai-key.mjs",
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "devDependencies": {
+    "vite": "^6.1.0"
+  }
+}
